@@ -2,14 +2,7 @@
 
 ## Introduction
 
-Having enough of overcomplicated or crappy commercial backup tools for Linux, I wrote this script to
-back up my home folder into s3 on a cron schedule using borg backup:
-
-  * Borg is quick, saves a great deal of space compared to traditional incremental backup solutions
-  * s3 is cheap compared to commercial backup solutions, and also reliable
-  * And cron is always easy to get going on linux
-
-This script will backup your home folder using borg. The backup will be both compressed and encrypted.
+This script will backup a specified directory using borg. The backup will be both compressed and encrypted.
 Since borg does not natively support s3, and the fuse/mount solution is slow as heck, we're using aws
 sync instead at the end. This actually works pretty well.
 
@@ -23,7 +16,6 @@ computer.
 
   * Linux for sure.
   * MacOS likely.
-  * Linux on Windows 10, long shot.
 
 ## Requirements
 
@@ -45,17 +37,17 @@ These are borg-standard, as per [borg's documentation](https://borgbackup.readth
 
 These are required by the script to function:
 
+  * **BORG_S3_BACKUP_ORIGIN**: put in here the directory you want to back up.
   * **BORG_S3_BACKUP_BUCKET**: put in here the bucket name only.
   * **BORG_S3_BACKUP_AWS_PROFILE**: put in here the aws cli profile that has access to that bucket (eg `default`).
+
+This is optional:
+
+  * **BORG_S3_BACKUP_EXCLUDE**: put in here the path to a exclude patterns. Refer to borg-create(1) for the specification.
 
 ## How to use
 
   * Git clone this repo somewhere in your computer.
-  * Copy [excludes.txt.dist](excludes.txt.dist) into `excludes.txt` and check its contents. The file is
-  mandatory, but it can be empty. Have a look at
-  [borg's documentation on the subject of excludes](https://borgbackup.readthedocs.io/en/stable/usage/help.html#borg-help-patterns) for more info.
-  [excludes.txt.dist](excludes.txt.dist) has a few examples, indeed these are for my specific use case. If not a regular expression, paths must be
-  absolute.
   * Install borg backup according to your platform. Possibly already on your distro's software repositories.
   * Install awscli - same as above.
   * AWS setup:
@@ -63,21 +55,41 @@ These are required by the script to function:
     * You must have access keys and secrets for it.
     * Configure aws cli with these credentials, eg `aws configure`.
     * Make yourself a bucket in your aws account.
-  * Set up the environment variables discussed above (eg on your `~/.profile`). I do recommend you also set `BORG_PASSPHRASE`.
+  * Set up the environment variables discussed above. I do recommend you also set `BORG_PASSPHRASE`.
+  * Optionally, create an exclude file.
   * Create a borg repo: `borg init`
-  * Run [borg-backup.sh](borg-backup.sh)!
+  * Run [borg-s3-backup.sh](borg-s3-backup.sh)!
 
-### Cron
+### Systemd timer
 
-By default, cron won't load any environment as it runs - make sure you source the file holding your environment
-variables before running the script!.
+Example timer unit that runs the backup every day at 19:00:
 
-Example crontab (assuming you added your environment variables into `~/.profile` that runs the backup every
-working weekday at 17:30, on low priority, piping the output into a log file in your home folder overwritting any
-previous logs:
+```
+[Unit]
+Description=Back up to S3 daily
 
-```cron
-30 17 * * MON-FRI . $HOME/.profile && nice -n19 $HOME/Projects/borg-s3-home-backup/borg-backup.sh > $HOME/backup.log 2>&1
+[Timer]
+OnCalendar=*-*-* 19:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Corresponding service unit, assuming you added your environment variables into `~/.config/borg-s3-backup/config`
+and installed the backup script in `~/.local/bin`:
+
+```
+[Unit]
+Description=Back up to S3
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/borg-s3-backup/config
+ExecStart=/bin/bash %h/.local/bin/borg-s3-backup.sh
+
+[Install]
+WantedBy=default.target
 ```
 
 ### Note: borg backup locking
@@ -88,7 +100,8 @@ unlocking with `borg break-lock`.
 
 ## Restoring backups
 
-There's no script here to restore your backups, you'll have to use borg for that. See [borg's documentation](https://borgbackup.readthedocs.io/en/stable/usage.html#borg-extract). Generally:
+There's no script here to restore your backups, you'll have to use borg for that.
+See [borg's documentation](https://borgbackup.readthedocs.io/en/stable/usage.html#borg-extract). Generally:
 
   * Make sure the environment variables above are all set.
   * Download from s3 all your backup files into the location at $BORG_REPO (if you don't have your local borg repo).
@@ -98,8 +111,8 @@ There's no script here to restore your backups, you'll have to use borg for that
   * Move extracted files where they're meant to be.
 
 Example for a typical desktop computer - total restore of your home folder:
-  * Make an administrative user whichever way you'd like, make sure they can `sudo` (for instance, on ubuntu
-  they must be on the `adm` group). You'll be using this user to restore your data. Do this even if your user
+  * Make an administrative user whichever way you'd like, make sure they can `sudo` (for instance, on Arch
+  they must be in the `wheel` group). You'll be using this user to restore your data. Do this even if your user
   is already sudo-able to avoid issues when running the commands below.
   * Log out of your desktop back to the log in screen.
   * `CTRL+ALT+F1` to switch to tty1.
